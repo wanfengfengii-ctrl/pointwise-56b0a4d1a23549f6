@@ -131,7 +131,8 @@ def apply_delta(path, session, fixture, source, action, delta):
         current = read_current(db, session, fixture)
         level = advance_level(current.level, delta)
         emitted = append_emission(db, session, fixture, source, 'adjust', action, level)
-        record_receipt_delta(db, emitted, delta if level != current.level else 0)
+        # 即使截幅后实显未变，也保留现场动作的原始增量，撤去重放时仍按原量参与。
+        record_receipt_delta(db, emitted, delta)
         return _receipt(db, emitted)
 
 
@@ -142,7 +143,7 @@ def preview_withdrawal(path, session, fixture, target):
         return {'level': project_withdrawal(db, current, initial, target)}
 
 
-def _apply_desk_level(db, session, fixture, action, kind, level, target_action):
+def _apply_desk_level(db, session, fixture, action, kind, level, target_action, delta=None):
     prior = _repeat(db, session, fixture, 'desk', action, kind, target_action)
     if prior is not None:
         return prior
@@ -158,10 +159,20 @@ def _apply_desk_level(db, session, fixture, action, kind, level, target_action):
             db.execute('INSERT INTO target_refusals VALUES (?, ?, ?, ?)',
                        (session, action, fixture, target_action))
             return None
-    previous = read_current(db, session, fixture)
+        # 撤去的亮度以灯台受理时刻的实显序为准重新核算：控台预览可能
+        # 早于在途的现场调光，直接采用其携带的亮度会抹掉预览之后、受
+        # 理之前已受理的现场动作。
+        initial = _binding_initial(db, session, fixture)
+        current = read_current(db, session, fixture)
+        level = project_withdrawal(db, current, initial, target_action)
+    else:
+        # 亮度仍按灯台当前实显逐步加减并截到 0–100，与控台预核值互相印证。
+        current = read_current(db, session, fixture)
+        level = advance_level(current.level, delta)
     emitted = append_emission(db, session, fixture, 'desk', kind, action, level, target=target_action)
     if kind == 'adjust':
-        record_receipt_delta(db, emitted, level - previous.level)
+        # 保留控台原始增量：饱和截幅或零增量都不改变首执登记的 delta。
+        record_receipt_delta(db, emitted, delta)
     return _receipt(db, emitted)
 
 
@@ -176,8 +187,9 @@ def execute_desk_command(path, body):
     if not valid_level(level):
         raise Problem(400, 'invalid_level')
     target = text_field(body, 'target') if kind == 'withdraw' else None
+    delta = integer_field(body, 'delta') if kind == 'adjust' else None
     with database(path, write=True) as db:
-        result = _apply_desk_level(db, session, fixture, action, kind, level, target)
+        result = _apply_desk_level(db, session, fixture, action, kind, level, target, delta)
     if result is None:
         raise Problem(404, 'unknown_target')
     return result

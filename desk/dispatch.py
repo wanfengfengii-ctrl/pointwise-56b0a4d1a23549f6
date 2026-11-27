@@ -9,6 +9,10 @@ def make_lamp_command(request):
         'fixture': request.fixture,
         'kind': request.kind,
     }
+    if request.kind == 'adjust':
+        # 随命令携带控台原始增量，灯台按受理顺序保留它（即使实显因截幅
+        # 而未变），撤去重放时才能还原现场与控台各自的原始调整。
+        command['delta'] = request.parameter
     if request.kind == 'withdraw':
         command['target'] = request.parameter
     return command

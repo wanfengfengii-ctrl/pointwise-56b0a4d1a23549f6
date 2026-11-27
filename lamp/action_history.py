@@ -24,14 +24,18 @@ def find_receipt_delta(db, emission):
 
 
 def project_withdrawal(db, current, initial, target):
+    # 撤去只排除本轮同灯位指定的控台调光动作；同一目标即使被多笔撤去
+    # 指向，也只在有效历史中排除一次。
     rows = [row for row in read_emissions_through(db, current.session, current.seq)
             if row.fixture == current.fixture]
     withdrawn = {row.target for row in rows if row.kind == 'withdraw'}
     withdrawn.add(target)
-    previous = initial
+    # 从固定初值按原序重放仍有效的调光动作，使用各动作受理时登记的原
+    # 增量（饱和处与零增量同样保留），而不是实显差值，这样此前已受理
+    # 的现场动作不会被抹掉。撤去本身不携带增量，不参与重放。
     movements = []
     for row in rows:
-        if row.kind == 'adjust' and (row.source == 'local' or row.action not in withdrawn):
-            movements.append(row.level - previous)
-        previous = row.level
+        if row.kind == 'adjust' and (row.source == 'local'
+                                     or row.action not in withdrawn):
+            movements.append(find_receipt_delta(db, row))
     return replay_levels(initial, movements)
